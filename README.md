@@ -147,6 +147,7 @@ best_bid >= MIN_BID        (0.99)
 | **去重** | 按市场隔离的 `ordered` 集合(`market_tag`),每轮每 token 最多下一单;`clear_round(tag)` 只清本市场记录,不影响其他市场(防止 5m 切轮误清 4h) |
 | **tick 对齐** | `align_price()` 把价格向下对齐到 `minimum_tick_size` 倍数,再 clamp 到 0.99(CLOB 限价单上限)。⚠️ 1h 市场 tick=0.001(需 "0.990"),其余 tick=0.01(需 "0.99"),必须动态读取 |
 | **固定份数** | size 固定为 `config.ORDER_SIZE`(默认 5 份),价格固定 clamp 到 0.99 并对齐 tick。⚠️ notional = 0.99×5 = 4.95,略低于 min_order_size=5,如被拒需调大份数 |
+| **幂等防重** | 下单前查 `list_open_orders(token_id=...)`,该 token 已有 BUY 挂单则跳过。防网络超时"实际已下单但响应丢失"后重试导致的重复下单 |
 | **失败冷却** | 下单失败/被拒进入 60s 冷却(`can_retry`),冷却后可重试;成功才标记去重 |
 | **授权** | `ensure_approvals()` 首次调用 `setup_trading_approvals()` 授权交易所花 pUSD 和 token(一次,幂等) |
 | **dry-run** | `dry_run=True` 时只模拟下单打日志,不真实发送(测试/验证用) |

@@ -57,6 +57,26 @@ class OrderManager:
         aligned = (price / tick_size).to_integral_value(rounding="ROUND_DOWN") * tick_size
         return aligned
 
+    # ---- 幂等: 挂单检查 ----
+    async def _has_open_buy(self, token_id: str) -> bool | None:
+        """该 token 是否已有 BUY 挂单。
+
+        Returns:
+            True  已有挂单 (应跳过, 防重复下单)
+            False 确认无挂单 (可下单)
+            None  查询失败 (无法确认, 调用方应保守处理)
+        """
+        try:
+            pages = self._client.list_open_orders(token_id=token_id)
+            async for page in pages:
+                for order in page.items:
+                    if order.side == "BUY":
+                        return True
+            return False
+        except Exception as e:  # noqa: BLE001
+            logger.warning("查询 open orders 失败 token=%s: %s", token_id, e)
+            return None
+
     # ---- 去重 / 冷却 (按市场隔离) ----
     def is_ordered(self, market_tag: str, token_id: str) -> bool:
         return token_id in self._ordered.get(market_tag, ())
@@ -106,6 +126,18 @@ class OrderManager:
                 )
                 self._ordered.setdefault(market_tag, set()).add(token_id)
                 return True
+
+            # 幂等: 下单前确认该 token 无 BUY 挂单。
+            # 网络超时可能 "实际已提交但响应丢失", 若直接重试会重复下单。
+            has_open = await self._has_open_buy(token_id)
+            if has_open is True:
+                logger.info("token=%s 已有挂单, 幂等跳过 (不重复下单)", token_id)
+                self._ordered.setdefault(market_tag, set()).add(token_id)
+                return True
+            if has_open is None:
+                logger.warning("无法确认挂单状态, 保守进入冷却 (token=%s)", token_id)
+                self.mark_failed(market_tag, token_id, now)
+                return False
 
             try:
                 await self.ensure_approvals()

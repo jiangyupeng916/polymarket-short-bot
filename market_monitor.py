@@ -54,10 +54,10 @@ class MarketMonitor:
 
         # 内部状态
         self._stop = False
-        self._last_event_time = 0.0
         self._msg_count = 0
         self._order_count = 0
-        self._pending: set[str] = set()  # 下单进行中的 token, 防重复 create_task
+        self._pending: set[str] = set()          # 下单进行中的 token, 防重复 create_task
+        self._last_trigger_log: dict[str, float] = {}  # token -> 上次 TRIGGER 日志时间 (去重)
 
     def stop(self) -> None:
         self._stop = True
@@ -75,33 +75,34 @@ class MarketMonitor:
 
     async def _monitor_round(self) -> None:
         """监控一轮: 获取市场 → 订阅监控 → 到期切换。"""
-        slug = current_slug(self.coin, self.period)
+        now = time.time()
+        slug = current_slug(self.coin, self.period, now)
         self._log.info("进入轮次, slug=%s", slug)
 
         market = await self._fetch_market_with_retry(slug)
         if market is None:
-            # 市场获取失败: 等待接近下一轮再重试, 避免反复打空
-            await asyncio.sleep(5)
+            # 市场获取失败: 等本轮结束再重试, 避免快速循环打 Gamma API
+            await self._sleep_until_round_end()
             return
 
         if not market.state.accepting_orders:
-            self._log.debug("市场未开单 (accepting_orders=False), 稍后重试")
-            await asyncio.sleep(5)
+            self._log.debug("市场未开单 (accepting_orders=False), 等本轮结束重试")
+            await self._sleep_until_round_end()
             return
 
-        # 读取约束与 token
+        # 读取约束与 token (统一 now, 保证 round_start/round_end 对应同一轮次)
+        now = time.time()
         self._tick_size = market.trading.minimum_tick_size or Decimal("0.01")
         self._min_order_size = market.trading.minimum_order_size or Decimal("5")
         self._up_token = market.outcomes.yes.token_id
         self._down_token = market.outcomes.no.token_id
-        self._round_end_ts = round_end(self.period)
-        self._cooldown_until = round_start(self.period) + COOLDOWN_SECONDS[self.period]
+        self._round_end_ts = round_end(self.period, now)
+        self._cooldown_until = round_start(self.period, now) + COOLDOWN_SECONDS[self.period]
 
         self._orders.clear_round(self._tag)
         self._best_bid = {self._up_token: None, self._down_token: None}
         self._best_ask = {self._up_token: None, self._down_token: None}
         self._msg_count = 0
-        self._last_event_time = time.time()
 
         self._log.info(
             "市场=%s 轮次至 %s tick=%s min_order=%s 冷静期至 %s",
@@ -125,6 +126,12 @@ class MarketMonitor:
                 backoff_idx += 1
                 self._log.warning("订阅断开 (%s), %.0fs 后重连", e, delay)
                 await asyncio.sleep(delay)
+
+    async def _sleep_until_round_end(self) -> None:
+        """等待当前轮次结束 (下一轮开始), 用于失败重试, 避免快速循环打 Gamma API。"""
+        wait = max(1, round_end(self.period) - time.time())
+        self._log.debug("等待 %.0fs 到下一轮再重试", wait)
+        await asyncio.sleep(wait)
 
     # ================= 市场获取 =================
     async def _fetch_market_with_retry(self, slug: str):
@@ -177,7 +184,6 @@ class MarketMonitor:
 
     # ================= 事件处理 =================
     def _handle_event(self, event) -> None:
-        self._last_event_time = time.time()
         self._msg_count += 1
         p = event.payload
 
@@ -222,11 +228,15 @@ class MarketMonitor:
                 continue
 
             direction = "Up" if token_id == self._up_token else "Down"
-            triggers_logger.info(
-                "TRIGGER %s %s %s best_bid=%s cooldown_passed",
-                self._tag, direction, token_id, bid,
-            )
-            self._log.info("触发买入 %s best_bid=%s", direction, bid)
+            # TRIGGER 日志去重: 同一 token 5 秒内只打一次
+            # (create_task 竞态会让同一触发在多个事件里重复打日志)
+            if now - self._last_trigger_log.get(token_id, 0) >= 5:
+                self._last_trigger_log[token_id] = now
+                triggers_logger.info(
+                    "TRIGGER %s %s %s best_bid=%s cooldown_passed",
+                    self._tag, direction, token_id, bid,
+                )
+                self._log.info("触发买入 %s best_bid=%s", direction, bid)
             asyncio.create_task(self._try_order(token_id, bid))
 
     async def _try_order(self, token_id: str, bid: Decimal) -> None:

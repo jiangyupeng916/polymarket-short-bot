@@ -29,7 +29,7 @@ def timestamp_slug(coin: str, period: str, now_ts: Optional[float] = None) -> st
     """时间戳型 slug: {缩写}-updown-{周期}-{unix秒}, 时间戳对齐到轮次起点。"""
     interval = INTERVAL_SECONDS[period]
     now = time.time() if now_ts is None else now_ts
-    ts = int((now // interval) * interval)
+    ts = (int(now) // interval) * interval
     return f"{coin}-updown-{period}-{ts}"
 
 
@@ -60,7 +60,7 @@ def round_start(period: str, now_ts: Optional[float] = None) -> int:
     now = time.time() if now_ts is None else now_ts
     if period in TIMESTAMP_PERIODS:
         interval = INTERVAL_SECONDS[period]
-        return int((now // interval) * interval)
+        return (int(now) // interval) * interval
     # 1h: 美东整点
     ny = _ny(now).replace(minute=0, second=0, microsecond=0)
     return int(ny.timestamp())
@@ -68,4 +68,9 @@ def round_start(period: str, now_ts: Optional[float] = None) -> int:
 
 def round_end(period: str, now_ts: Optional[float] = None) -> int:
     """当前轮次终点 (unix 秒)。"""
-    return round_start(period, now_ts) + INTERVAL_SECONDS[period]
+    now = time.time() if now_ts is None else now_ts
+    if period in TIMESTAMP_PERIODS:
+        return round_start(period, now) + INTERVAL_SECONDS[period]
+    # 1h: 下一个美东整点 (wall-clock +1h, 正确处理夏令时切换日的非 24h 轮次)
+    ny = _ny(now).replace(minute=0, second=0, microsecond=0)
+    return int((ny + datetime.timedelta(hours=1)).timestamp())
