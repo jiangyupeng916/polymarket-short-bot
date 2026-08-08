@@ -121,7 +121,7 @@ async def run(instance: str, dry_run: bool) -> None:
     load_credentials(instance)
     logger.info("==== 启动 Polymarket 短线监控 bot instance=%s ====", instance)
     logger.info("监控: 币种=%s 周期=%s", config.COINS, config.PERIODS)
-    logger.info("阈值 MIN_BID=%s 每单金额=%s pUSD", config.MIN_BID, config.ORDER_AMOUNT)
+    logger.info("阈值 MIN_BID=%s 每单份数=%s", config.MIN_BID, config.ORDER_SIZE)
     logger.info("下单模式: %s", "DRY-RUN (模拟下单, 不真实发送)" if dry_run else "真实下单")
 
     async with AsyncPublicClient() as public:

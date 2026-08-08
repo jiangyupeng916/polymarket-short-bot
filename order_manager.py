@@ -13,24 +13,23 @@ import asyncio
 import logging
 from decimal import Decimal
 
-from config import ORDER_AMOUNT
+from config import ORDER_SIZE
 
 logger = logging.getLogger(__name__)
 
 MAX_PRICE = Decimal("0.99")        # CLOB 限价单价格上限
 RETRY_COOLDOWN = 60.0              # 下单失败后的重试冷却 (秒)
-SHARE_DECIMALS = 2                 # shares 精度 (2 位小数)
 
 
 class OrderManager:
     def __init__(
         self,
         secure_client,
-        order_amount: float = ORDER_AMOUNT,
+        order_size: float = ORDER_SIZE,
         dry_run: bool = False,
     ) -> None:
         self._client = secure_client
-        self._amount = Decimal(str(order_amount))
+        self._size = Decimal(str(order_size))
         self._dry_run = dry_run
         self._lock = asyncio.Lock()
         self._ordered: set[str] = set()          # 已成功下单的 token_id
@@ -78,10 +77,9 @@ class OrderManager:
         token_id: str,
         price: Decimal,
         tick_size: Decimal,
-        min_order_size: Decimal,
         now: float,
     ) -> bool:
-        """串行限价下单 (BUY, GTC)。
+        """串行限价下单 (BUY, GTC, 固定份数).
 
         Returns:
             True 下单成功; False 下单失败/被拒 (已进入冷却)。
@@ -93,11 +91,8 @@ class OrderManager:
             # 价格: clamp 到 0.99 上限后对齐到 tick 网格
             price = self.align_price(min(price, MAX_PRICE), tick_size)
 
-            # size (份数): 目标花费 / 价格, 且 notional 至少满足最小订单额
-            raw = max(self._amount / price, min_order_size / price)
-            size = (raw * Decimal(10) ** SHARE_DECIMALS).to_integral_value(
-                rounding="ROUND_CEILING"
-            ) / (Decimal(10) ** SHARE_DECIMALS)
+            # size: 固定份数 (config.ORDER_SIZE)
+            size = self._size
 
             # DRY-RUN: 只模拟, 不真实下单 (验证/测试用)
             if self._dry_run:

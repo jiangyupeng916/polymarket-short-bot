@@ -31,9 +31,10 @@ TIMESTAMP_PERIODS = ("5m", "15m", "4h")
 # ---- 下单策略 ----
 MIN_BID = 0.99  # 触发阈值: best_bid >= 0.99 才考虑下单
 
-# 每单目标花费 (pUSD)。注意 CLOB 最小订单额是 5 pUSD notional,
-# 低于会被拒; 代码里会保证 notional >= min_order_size。
-ORDER_AMOUNT = 5.0
+# 每单下单份数 (shares)。下单价格固定 clamp 到 0.99 (对齐 tick 后)。
+# ⚠️ notional = 0.99 × 5 = 4.95, 略低于 CLOB 的 minimum_order_size=5,
+#    如被拒请调大份数 (如 6 份)。
+ORDER_SIZE = 5.0
 
 # 冷静期: 轮次前期不交易 (秒)。防止过早入场被噪音误导。
 COOLDOWN_SECONDS = {"5m": 210, "15m": 660, "1h": 2700, "4h": 12600}

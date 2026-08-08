@@ -71,7 +71,7 @@ polymarket-short-monitor/
 | `COIN_FULL_NAMES` | `btc→bitcoin` 等 | 缩写↔全称映射(日期型 slug 用) |
 | `INTERVAL_SECONDS` | `5m:300 / 15m:900 / 1h:3600 / 4h:14400` | 轮次时长 |
 | `MIN_BID` | `0.99` | 触发阈值,`best_bid >= 0.99` 才考虑下单 |
-| `ORDER_AMOUNT` | `5.0` | 每单目标花费(pUSD) |
+| `ORDER_SIZE` | `5.0` | 每单下单份数(shares),价格固定 clamp 0.99 对齐 tick |
 | `COOLDOWN_SECONDS` | `5m:210 / 15m:660 / 1h:2700 / 4h:12600` | 轮次前期冷静期,时间换确定性 |
 | `NO_DATA_TIMEOUT` | `5m/15m:5s / 1h/4h:300s` | 差异化无数据超时(高频/低频) |
 | `RECONNECT_BACKOFF` | `[1,2,5,10,20,30]` | 断流重连指数退避 |
@@ -146,7 +146,7 @@ best_bid >= MIN_BID        (0.99)
 | **串行化** | 全局 `asyncio.Lock`,28 个市场可能同时触发,但下单请求排队执行,避免并发撞 CLOB 限流 |
 | **去重** | `ordered` 集合,每轮每 token 最多下一单;`clear_round()` 轮次切换时清空 |
 | **tick 对齐** | `align_price()` 把价格向下对齐到 `minimum_tick_size` 倍数,再 clamp 到 0.99(CLOB 限价单上限)。⚠️ 1h 市场 tick=0.001(需 "0.990"),其余 tick=0.01(需 "0.99"),必须动态读取 |
-| **最小订单额** | size(份数) 计算保证 `notional = price × size >= minimum_order_size`(实测 = 5),否则被 CLOB 拒绝 |
+| **固定份数** | size 固定为 `config.ORDER_SIZE`(默认 5 份),价格固定 clamp 到 0.99 并对齐 tick。⚠️ notional = 0.99×5 = 4.95,略低于 min_order_size=5,如被拒需调大份数 |
 | **失败冷却** | 下单失败/被拒进入 60s 冷却(`can_retry`),冷却后可重试;成功才标记去重 |
 | **授权** | `ensure_approvals()` 首次调用 `setup_trading_approvals()` 授权交易所花 pUSD 和 token(一次,幂等) |
 | **dry-run** | `dry_run=True` 时只模拟下单打日志,不真实发送(测试/验证用) |
@@ -255,7 +255,7 @@ cat data/bot1/triggers.log               # 每次触发下单的信号记录
 
 1. **tick_size 必须动态读**:1h 市场是 `0.001`,其余 `0.01`。写死价格格式会导致下单被拒。已在 `_monitor_round` 读取并用于 `align_price`。
 2. **订阅会收到同市场两个方向的推送**:`price_change` 里必须按 `token_id` 过滤,否则会把 Down 的 best_bid 误判为 Up。
-3. **`minimum_order_size = 5`**:每单 notional 至少 5 pUSD,1 pUSD 小单会被 CLOB 拒绝。`ORDER_AMOUNT` 默认已设为 5。
+3. **`minimum_order_size = 5`**:CLOB 要求每单 notional ≥ 5 pUSD。当前配置 5 份 × 0.99 = 4.95 略低于该值,若下单被拒请调大 `ORDER_SIZE`(如 6 份)。
 4. **outcomes 映射**:实测 `market.outcomes.yes = Up`、`outcomes.no = Down`(按 Gamma API 原始数组顺序归一化)。
 5. **冷静期是防噪音的关键**:轮次前期价格不稳定,`5m` 冷静期 210s(前 70% 时间),`4h` 冷静期 12600s(前 87.5%),只做后半段。
 6. **验证务必用 `--dry-run`**:本仓库在真实验证时曾因触发条件满足产生真实挂单,已加 dry-run 模式规避。

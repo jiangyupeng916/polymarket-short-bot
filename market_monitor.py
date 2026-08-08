@@ -238,7 +238,6 @@ class MarketMonitor:
                 token_id=token_id,
                 price=bid,
                 tick_size=self._tick_size,
-                min_order_size=self._min_order_size,
                 now=time.time(),
             )
             if ok:
