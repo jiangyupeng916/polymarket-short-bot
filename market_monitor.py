@@ -97,7 +97,7 @@ class MarketMonitor:
         self._round_end_ts = round_end(self.period)
         self._cooldown_until = round_start(self.period) + COOLDOWN_SECONDS[self.period]
 
-        self._orders.clear_round()
+        self._orders.clear_round(self._tag)
         self._best_bid = {self._up_token: None, self._down_token: None}
         self._best_ask = {self._up_token: None, self._down_token: None}
         self._msg_count = 0
@@ -214,9 +214,9 @@ class MarketMonitor:
         for token_id, bid in list(self._best_bid.items()):
             if bid is None or bid < MIN_BID_DEC:
                 continue
-            if self._orders.is_ordered(token_id):
+            if self._orders.is_ordered(self._tag, token_id):
                 continue
-            if not self._orders.can_retry(token_id, now):
+            if not self._orders.can_retry(self._tag, token_id, now):
                 continue
             if token_id in self._pending:
                 continue
@@ -235,6 +235,7 @@ class MarketMonitor:
         self._pending.add(token_id)
         try:
             ok = await self._orders.place(
+                market_tag=self._tag,
                 token_id=token_id,
                 price=bid,
                 tick_size=self._tick_size,

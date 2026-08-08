@@ -144,7 +144,7 @@ best_bid >= MIN_BID        (0.99)
 | 职责 | 实现 |
 |------|------|
 | **串行化** | 全局 `asyncio.Lock`,28 个市场可能同时触发,但下单请求排队执行,避免并发撞 CLOB 限流 |
-| **去重** | `ordered` 集合,每轮每 token 最多下一单;`clear_round()` 轮次切换时清空 |
+| **去重** | 按市场隔离的 `ordered` 集合(`market_tag`),每轮每 token 最多下一单;`clear_round(tag)` 只清本市场记录,不影响其他市场(防止 5m 切轮误清 4h) |
 | **tick 对齐** | `align_price()` 把价格向下对齐到 `minimum_tick_size` 倍数,再 clamp 到 0.99(CLOB 限价单上限)。⚠️ 1h 市场 tick=0.001(需 "0.990"),其余 tick=0.01(需 "0.99"),必须动态读取 |
 | **固定份数** | size 固定为 `config.ORDER_SIZE`(默认 5 份),价格固定 clamp 到 0.99 并对齐 tick。⚠️ notional = 0.99×5 = 4.95,略低于 min_order_size=5,如被拒需调大份数 |
 | **失败冷却** | 下单失败/被拒进入 60s 冷却(`can_retry`),冷却后可重试;成功才标记去重 |
