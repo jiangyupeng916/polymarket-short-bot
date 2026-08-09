@@ -8,8 +8,8 @@
 from __future__ import annotations
 
 # ---- 监控对象 ----
-COINS = ["btc", "eth", "sol", "xrp", "doge", "bnb", "hype"]
-PERIODS = ["5m", "15m", "1h", "4h"]
+COINS = ["btc", "eth"]
+PERIODS = ["5m", "15m"]
 
 # 币种缩写 -> 全称 (日期型 slug 用)
 COIN_FULL_NAMES = {
@@ -29,11 +29,12 @@ INTERVAL_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
 TIMESTAMP_PERIODS = ("5m", "15m", "4h")
 
 # ---- 下单策略 ----
-MIN_BID = 0.99  # 触发阈值: best_bid >= 0.99 才考虑下单
+MIN_BID = 0.98           # 触发阈值: best_bid >= 0.98 才考虑下单
+ORDER_PRICE = 0.99        # 固定挂单价: 触发后始终以 0.99 挂限价买单
 
-# 每单下单份数 (shares)。下单价格固定 clamp 到 0.99 (对齐 tick 后)。
-# ⚠️ notional = 0.99 × 5 = 4.95, 略低于 CLOB 的 minimum_order_size=5,
-#    如被拒请调大份数 (如 6 份)。
+# 每单下单份数 (shares)。
+# ⚠️ notional = ORDER_PRICE × ORDER_SIZE = 0.99 × 5 = 4.95,
+#    略低于 CLOB 的 minimum_order_size=5, 如被拒请调大份数 (如 6 份)。
 ORDER_SIZE = 5.0
 
 # 冷静期: 轮次前期不交易 (秒)。防止过早入场被噪音误导。

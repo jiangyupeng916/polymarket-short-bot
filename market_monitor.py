@@ -21,6 +21,7 @@ from config import (
     HEARTBEAT_SECONDS,
     MIN_BID,
     NO_DATA_TIMEOUT,
+    ORDER_PRICE,
     RECONNECT_BACKOFF,
 )
 from slug import current_slug, round_end, round_start
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 triggers_logger = logging.getLogger("triggers")
 
 MIN_BID_DEC = Decimal(str(MIN_BID))
+ORDER_PRICE_DEC = Decimal(str(ORDER_PRICE))
 
 
 class MarketMonitor:
@@ -247,7 +249,7 @@ class MarketMonitor:
             ok = await self._orders.place(
                 market_tag=self._tag,
                 token_id=token_id,
-                price=bid,
+                price=ORDER_PRICE_DEC,
                 tick_size=self._tick_size,
                 now=time.time(),
             )
