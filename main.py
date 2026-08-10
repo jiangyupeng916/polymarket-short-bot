@@ -78,6 +78,20 @@ def setup_logging(instance: str) -> None:
     trig_h.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     triggers.addHandler(trig_h)
 
+    # 结果日志: 每单胜负记录, 每天轮转, 保留 90 天
+    results = logging.getLogger("results")
+    results.setLevel(logging.INFO)
+    results.propagate = False
+    res_h = TimedRotatingFileHandler(
+        os.path.join(log_dir, "results.log"),
+        when="midnight",
+        backupCount=90,
+        encoding="utf-8",
+    )
+    res_h.setLevel(logging.INFO)
+    res_h.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    results.addHandler(res_h)
+
     # 第三方库日志降噪 (文件 DEBUG 级别下 httpx/websockets 会刷屏)
     for noisy in ("httpx", "httpcore", "hpack", "h2", "websockets", "websockets.client"):
         logging.getLogger(noisy).setLevel(logging.WARNING)

@@ -28,6 +28,7 @@ from slug import current_slug, round_end, round_start
 
 logger = logging.getLogger(__name__)
 triggers_logger = logging.getLogger("triggers")
+results_logger = logging.getLogger("results")
 
 MIN_BID_DEC = Decimal(str(MIN_BID))
 ORDER_PRICE_DEC = Decimal(str(ORDER_PRICE))
@@ -60,6 +61,7 @@ class MarketMonitor:
         self._order_count = 0
         self._pending: set[str] = set()          # 下单进行中的 token, 防重复 create_task
         self._last_trigger_log: dict[str, float] = {}  # token -> 上次 TRIGGER 日志时间 (去重)
+        self._round_orders: list[dict] = []       # 本轮已下单记录 [{token_id, direction, time}]
 
     def stop(self) -> None:
         self._stop = True
@@ -105,6 +107,7 @@ class MarketMonitor:
         self._best_bid = {self._up_token: None, self._down_token: None}
         self._best_ask = {self._up_token: None, self._down_token: None}
         self._msg_count = 0
+        self._round_orders.clear()
 
         self._log.info(
             "市场=%s 轮次至 %s tick=%s min_order=%s 冷静期至 %s",
@@ -128,6 +131,9 @@ class MarketMonitor:
                 backoff_idx += 1
                 self._log.warning("订阅断开 (%s), %.0fs 后重连", e, delay)
                 await asyncio.sleep(delay)
+
+        # 轮次结束: 检查本轮下单结果 (胜/反转)
+        await self._check_round_result(slug)
 
     async def _sleep_until_round_end(self) -> None:
         """等待当前轮次结束 (下一轮开始), 用于失败重试, 避免快速循环打 Gamma API。"""
@@ -222,6 +228,9 @@ class MarketMonitor:
         for token_id, bid in list(self._best_bid.items()):
             if bid is None or bid < MIN_BID_DEC:
                 continue
+            # 检查对面是否有卖单 (有 ask 才说明 0.99 买单能成交)
+            if self._best_ask.get(token_id) is None:
+                continue
             if self._orders.is_ordered(self._tag, token_id):
                 continue
             if not self._orders.can_retry(self._tag, token_id, now):
@@ -255,5 +264,70 @@ class MarketMonitor:
             )
             if ok:
                 self._order_count += 1
+                direction = "Up" if token_id == self._up_token else "Down"
+                self._round_orders.append({
+                    "token_id": token_id,
+                    "direction": direction,
+                    "time": time.time(),
+                })
         finally:
             self._pending.discard(token_id)
+
+    # ================= 结果跟踪 =================
+    async def _check_round_result(self, slug: str) -> None:
+        """轮次结束后检查下单结果, 统计胜/反转。
+
+        市场结算后, 获胜方 token 价格 → 1.0, 失败方 → 0.0。
+        通过重新获取市场检查结算状态, 对比下单方向判断胜负。
+        """
+        if not self._round_orders:
+            return
+
+        # 等待市场结算 (通常轮次结束后几秒内完成)
+        await asyncio.sleep(15)
+
+        up_won = None  # True=Up赢了, False=Down赢了, None=无法判断
+        try:
+            market = await self._public.get_market(slug=slug)
+            # 尝试从市场状态判断结算结果
+            if hasattr(market, "outcomes") and market.outcomes is not None:
+                # 检查 yes/no token 的价格: 赢家 ≈ 1.0, 输家 ≈ 0.0
+                if hasattr(market.outcomes, "yes") and hasattr(market.outcomes.yes, "price"):
+                    yes_price = float(market.outcomes.yes.price)
+                    if yes_price > 0.9:
+                        up_won = True
+                    elif yes_price < 0.1:
+                        up_won = False
+        except Exception:
+            self._log.debug("获取结算后的市场失败 slug=%s, 无法判断胜负", slug)
+
+        # 记录每单结果
+        for order in self._round_orders:
+            if up_won is None:
+                verdict = "UNRESOLVED"
+            else:
+                won = (order["direction"] == "Up" and up_won) or (order["direction"] == "Down" and not up_won)
+                verdict = "WIN" if won else "REVERSAL"
+
+            results_logger.info(
+                "%s %s %s %s slug=%s",
+                self._tag, order["direction"], order["token_id"][:12], verdict, slug,
+            )
+            self._log.info(
+                "结算 %s/%s: %s -> %s",
+                self._tag, order["direction"], order["token_id"][:12], verdict,
+            )
+
+        # 累计统计
+        wins = sum(1 for _ in self._round_orders) if up_won is not None else 0
+        reversals = 0
+        if up_won is not None:
+            for order in self._round_orders:
+                won = (order["direction"] == "Up" and up_won) or (order["direction"] == "Down" and not up_won)
+                if not won:
+                    reversals += 1
+        if up_won is not None:
+            self._log.info(
+                "本轮统计 %s: 下单=%d 胜=%d 反转=%d",
+                self._tag, len(self._round_orders), wins, reversals,
+            )
