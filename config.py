@@ -50,6 +50,10 @@ RECONNECT_BACKOFF = [1, 2, 5, 10, 20, 30]
 # Gamma API 失败重试间隔 (秒)
 GAMMA_RETRY_DELAYS = [2.0, 4.0]
 
+# ---- 结算跟踪 ----
+# 集中批量查询结算结果的间隔 (秒)。下单后不立即查, 等一段时间后统一查。
+RESOLUTION_POLL_SECONDS = 600  # 10 分钟
+
 # ---- 日志 ----
 LOG_DIR = "data"                      # 相对项目根目录
 LOG_MAX_BYTES = 200 * 1024 * 1024     # 200MB

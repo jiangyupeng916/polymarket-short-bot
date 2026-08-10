@@ -26,6 +26,7 @@ from polymarket import AsyncPublicClient, AsyncSecureClient, RelayerApiKey
 import config
 from market_monitor import MarketMonitor
 from order_manager import OrderManager
+from resolution_tracker import ResolutionTracker
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 logger = logging.getLogger("main")
@@ -144,17 +145,20 @@ async def run(instance: str, dry_run: bool) -> None:
             logger.info("账户连接成功 wallet=%s type=%s", secure.wallet, secure.wallet_type)
 
             order_manager = OrderManager(secure, dry_run=dry_run)
+            tracker = ResolutionTracker()
             monitors = [
-                MarketMonitor(coin, period, public, order_manager)
+                MarketMonitor(coin, period, public, order_manager, tracker)
                 for coin in config.COINS
                 for period in config.PERIODS
             ]
             logger.info("启动 %d 个市场监控任务", len(monitors))
 
             tasks = [asyncio.create_task(m.run()) for m in monitors]
+            poll_task = asyncio.create_task(tracker.poll_loop())
 
             def shutdown() -> None:
                 logger.info("收到退出信号, 优雅关闭 %d 个任务...", len(monitors))
+                tracker.stop()
                 for m in monitors:
                     m.stop()
 
@@ -174,10 +178,12 @@ async def run(instance: str, dry_run: bool) -> None:
             finally:
                 for m in monitors:
                     m.stop()
-                for t in tasks:
+                tracker.stop()
+                for t in tasks + [poll_task]:
                     t.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-                logger.info("==== 已全部退出 ====")
+                await asyncio.gather(*tasks, poll_task, return_exceptions=True)
+                wins, reversals = tracker.stats
+                logger.info("==== 已全部退出 结算统计: 胜=%d 反转=%d ====", wins, reversals)
 
 
 def main() -> None:
