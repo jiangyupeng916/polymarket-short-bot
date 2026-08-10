@@ -304,8 +304,8 @@ sudo systemctl stop polymarket-bot1
 
 # nohup 方式
 kill $(cat ~/polymarket-short-bot/bot1.pid)
-# 或
-pkill -f "main.py bot1"
+# 或（带项目路径前缀，避免误杀同服务器其他项目的 bot1）
+pkill -f "polymarket-short-bot/venv/bin/python.*main.py bot1"
 ```
 
 ### 6.3 重启
@@ -446,5 +446,7 @@ journalctl -u polymarket-bot1 -f
 
 # === 进程 ===
 ps aux | grep main.py
-pkill -f "main.py bot1"
+# ⚠️ pgrep 必须带项目路径前缀，否则会误杀其他项目的 bot1 进程
+pgrep -f "polymarket-short-bot/venv/bin/python.*main.py bot1"
+pkill -f "polymarket-short-bot/venv/bin/python.*main.py bot1"
 ```
