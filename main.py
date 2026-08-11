@@ -182,8 +182,22 @@ async def run(instance: str, dry_run: bool) -> None:
                 for t in tasks + [poll_task]:
                     t.cancel()
                 await asyncio.gather(*tasks, poll_task, return_exceptions=True)
-                wins, reversals = tracker.stats
-                logger.info("==== 已全部退出 结算统计: 胜=%d 反转=%d ====", wins, reversals)
+                s = tracker.stats
+                wins, reversals = s["total_win"], s["total_reversal"]
+                logger.info(
+                    "==== 已全部退出 结算统计: 胜=%d 反转=%d 已结算=%d 胜率=%.1f%% ====",
+                    wins, reversals, wins + reversals,
+                    wins / (wins + reversals) * 100 if (wins + reversals) > 0 else 0,
+                )
+                by_tag = s.get("by_tag", {})
+                if by_tag:
+                    logger.info("==== 按市场结算明细 ====")
+                    logger.info("%-12s %6s %6s %7s", "市场", "WIN", "REV", "胜率")
+                    for tag in sorted(by_tag.keys()):
+                        t = by_tag[tag]
+                        r = t["win"] + t["reversal"]
+                        rate = f"{t['win'] / r * 100:.1f}%" if r > 0 else "N/A"
+                        logger.info("%-12s %6d %6d %7s", tag, t["win"], t["reversal"], rate)
 
 
 def main() -> None:

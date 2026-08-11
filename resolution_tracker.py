@@ -1,13 +1,15 @@
 """结算结果跟踪器 — 集中批量查询已下单市场的结算结果。
 
 每轮结束后不立即检查, 而是把已下单的市场注册到待查列表,
-由一个独立后台任务定时批量查询 Gamma API, 通过 tokens[].winner 判断胜负。
+由一个独立后台任务定时批量查询 Gamma API, 通过 outcomePrices 判断胜负。
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+from collections import defaultdict
 
 import requests
 
@@ -29,10 +31,17 @@ class ResolutionTracker:
         self._stop = False
         self._total_win = 0
         self._total_reversal = 0
+        self._by_tag: dict[str, dict[str, int]] = defaultdict(
+            lambda: {"win": 0, "reversal": 0}
+        )
 
     @property
-    def stats(self) -> tuple[int, int]:
-        return self._total_win, self._total_reversal
+    def stats(self) -> dict:
+        return {
+            "total_win": self._total_win,
+            "total_reversal": self._total_reversal,
+            "by_tag": dict(self._by_tag),
+        }
 
     def stop(self) -> None:
         self._stop = True
@@ -103,8 +112,10 @@ class ResolutionTracker:
             )
             if r["verdict"] == "WIN":
                 self._total_win += 1
+                self._by_tag[r["tag"]]["win"] += 1
             elif r["verdict"] == "REVERSAL":
                 self._total_reversal += 1
+                self._by_tag[r["tag"]]["reversal"] += 1
 
         if resolved:
             logger.info(
@@ -115,12 +126,15 @@ class ResolutionTracker:
     async def _query_resolution(self, item: dict) -> dict | None:
         """查询单个市场的结算结果。
 
+        使用 Gamma API outcomePrices 判断胜负:
+        - outcomePrices[0] (Yes/Up) > 0.9 → Up 赢
+        - outcomePrices[1] (No/Down) > 0.9 → Down 赢
+
         Returns:
             dict with verdict if resolved; None if not yet resolved or query failed.
         """
         slug = item["slug"]
         try:
-            # 直接用 Gamma API 获取原始 JSON, SDK 的 Market 模型不暴露 tokens[].winner
             resp = await asyncio.to_thread(
                 lambda: requests.get(
                     f"{GAMMA_BASE}/markets/slug/{slug}", timeout=10
@@ -130,48 +144,50 @@ class ResolutionTracker:
             data = resp.json()
         except Exception as e:
             logger.debug("查询市场结算失败 slug=%s: %s", slug[:30], e)
-            # 查询失败放回队列重试 (网络波动, 非最终失败)
             return None
 
-        # 检查市场是否已关闭 (已结算)
-        state_closed = data.get("closed", False)
-        if not state_closed:
-            # 尚未结算, 放回队列
-            return None
+        # ---- 方法1: outcomePrices (Gamma API 标准字段) ----
+        prices_str = data.get("outcomePrices")
+        if prices_str:
+            try:
+                prices = (
+                    json.loads(prices_str)
+                    if isinstance(prices_str, str)
+                    else prices_str
+                )
+                if isinstance(prices, list) and len(prices) >= 2:
+                    yes_price = float(prices[0])
+                    no_price = float(prices[1])
 
-        # 市场已结算: 通过 tokens[].winner 判断胜负
-        tokens = data.get("tokens", [])
-        up_won = None  # True=Up赢了, False=Down赢了
-        for t in tokens:
-            if t.get("token_id") == item["up_token_id"] and t.get("winner"):
-                up_won = True
-                break
-            elif t.get("token_id") == item["down_token_id"] and t.get("winner"):
-                up_won = False
-                break
-
-        if up_won is None:
-            # tokens 中没有 winner 信息, 尝试用 price 兜底
-            for t in tokens:
-                price = t.get("price")
-                if price is None:
-                    continue
-                price = float(price)
-                if t.get("token_id") == item["up_token_id"]:
-                    if price > 0.9:
+                    if yes_price > 0.9:
                         up_won = True
-                    elif price < 0.1:
+                    elif no_price > 0.9:
                         up_won = False
+                    else:
+                        # 价格不在极端位置: 市场可能尚未结算
+                        if not data.get("closed"):
+                            return None
+                        # 已关闭但价格异常 (极小概率), 放回队列重试
+                        logger.debug(
+                            "市场已关闭但价格不极端 slug=%s yes=%.4f no=%.4f",
+                            slug[:30], yes_price, no_price,
+                        )
+                        return None
 
-        if up_won is None:
-            logger.debug("无法判断市场胜负 slug=%s tokens=%s", slug[:30], tokens)
-            # 已关闭但无法判断 → 标记 UNRESOLVED, 不再放回队列
-            item["verdict"] = "UNRESOLVED"
-            return item
+                    won = (
+                        (item["direction"] == "Up" and up_won)
+                        or (item["direction"] == "Down" and not up_won)
+                    )
+                    item["verdict"] = "WIN" if won else "REVERSAL"
+                    return item
 
-        won = (
-            (item["direction"] == "Up" and up_won)
-            or (item["direction"] == "Down" and not up_won)
-        )
-        item["verdict"] = "WIN" if won else "REVERSAL"
-        return item
+            except (ValueError, TypeError, json.JSONDecodeError):
+                pass
+
+        # ---- 方法2: 没有 outcomePrices, 用 closed 兜底 ----
+        if not data.get("closed"):
+            return None
+
+        # 已关闭但无法判断 → 放回队列重试 (不放弃)
+        logger.debug("无法判断市场胜负 slug=%s", slug[:30])
+        return None
