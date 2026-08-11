@@ -245,6 +245,16 @@ class MarketMonitor:
                     self._tag, direction, token_id, bid,
                 )
                 self._log.info("触发买入 %s best_bid=%s", direction, bid)
+            # 触发即注册到结算跟踪器 (不依赖下单是否成功)
+            if self._tracker is not None:
+                asyncio.create_task(self._tracker.register(
+                    slug=self._current_slug,
+                    tag=self._tag,
+                    up_token_id=self._up_token,
+                    down_token_id=self._down_token,
+                    direction=direction,
+                    token_id=token_id,
+                ))
             asyncio.create_task(self._try_order(token_id, bid))
 
     async def _try_order(self, token_id: str, bid: Decimal) -> None:
@@ -261,16 +271,5 @@ class MarketMonitor:
             )
             if ok:
                 self._order_count += 1
-                direction = "Up" if token_id == self._up_token else "Down"
-                # 注册到集中结算跟踪器, 由后台任务批量查询结果
-                if self._tracker is not None:
-                    await self._tracker.register(
-                        slug=self._current_slug,
-                        tag=self._tag,
-                        up_token_id=self._up_token,
-                        down_token_id=self._down_token,
-                        direction=direction,
-                        token_id=token_id,
-                    )
         finally:
             self._pending.discard(token_id)

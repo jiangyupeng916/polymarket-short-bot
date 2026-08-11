@@ -191,13 +191,32 @@ async def run(instance: str, dry_run: bool) -> None:
                 )
                 by_tag = s.get("by_tag", {})
                 if by_tag:
+                    profit_per_win = (1.0 - config.ORDER_PRICE) * config.ORDER_SIZE
+                    loss_per_rev = config.ORDER_PRICE * config.ORDER_SIZE
                     logger.info("==== 按市场结算明细 ====")
-                    logger.info("%-12s %6s %6s %7s", "市场", "WIN", "REV", "胜率")
+                    logger.info("%-12s %6s %6s %7s %8s %8s %8s",
+                                "市场", "WIN", "REV", "胜率", "盈利", "亏损", "净利")
+                    grand_win = 0; grand_rev = 0
                     for tag in sorted(by_tag.keys()):
                         t = by_tag[tag]
                         r = t["win"] + t["reversal"]
                         rate = f"{t['win'] / r * 100:.1f}%" if r > 0 else "N/A"
-                        logger.info("%-12s %6d %6d %7s", tag, t["win"], t["reversal"], rate)
+                        wp = t["win"] * profit_per_win
+                        rl = t["reversal"] * loss_per_rev
+                        net = wp - rl
+                        grand_win += t["win"]; grand_rev += t["reversal"]
+                        logger.info("%-12s %6d %6d %7s %+8.2f %+8.2f %+8.2f",
+                                    tag, t["win"], t["reversal"], rate, wp, -rl, net)
+                    gr = grand_win + grand_rev
+                    gwp = grand_win * profit_per_win
+                    grl = grand_rev * loss_per_rev
+                    gn = gwp - grl
+                    logger.info("%-12s %6d %6d %7s %+8.2f %+8.2f %+8.2f",
+                                "总计", grand_win, grand_rev,
+                                f"{grand_win / gr * 100:.1f}%" if gr > 0 else "N/A",
+                                gwp, -grl, gn)
+                    inv = gr * config.ORDER_PRICE * config.ORDER_SIZE
+                    logger.info("总投入: $%.2f  ROI: %.2f%%", inv, gn / inv * 100 if inv > 0 else 0)
 
 
 def main() -> None:
